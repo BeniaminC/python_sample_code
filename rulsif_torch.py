@@ -3,21 +3,15 @@ RuLSIF Time-Series Anomaly detection using torch
 Author: Beniamin Condrea
 Written 7/18/2022
 """
-import sys
-
-sys.path.append("..")
-sys.path.append(".")
-
-
 from typing import Any, Callable, Dict
 
 import torch
 from torch.backends import cuda
 
-
 torch.set_printoptions(precision=5)
 torch.set_default_dtype(torch.float32)
 cuda.matmul.allow_tf32 = True
+
 
 
 def tensor_debugging(tensor: torch.Tensor) -> None:
@@ -84,7 +78,8 @@ def cuda_debugging(device: str) -> Dict[str, Any]:
 
 class RulsifTimeSeriesAnomalyDetection:
     """
-    Apply RuLSIF anomaly detection on multi-dimensional time series data.
+    Apply RuLSIF anomaly detection on multi-dimensional time series data. Supports non-
+    batching and batching
 
         Args:
             data (:obj:`torch.Tensor`): time-series data. Support multidimensional data.
@@ -249,7 +244,7 @@ class RulsifTimeSeriesAnomalyDetection:
             while start_idx < self.__dissimilarities_size:
                 y_1 = y_1_batch_subsequences[start_idx:end_idx]
                 y_2 = y_2_batch_subsequences[start_idx:end_idx]
-                diss_calc = self.fast_bidirectional_dissimilarity2(
+                diss_calc = self.fast_batch_bidirectional_dissimilarity(
                     y_1, y_2, self.__alpha, self.__lambda, sigma_gaussian_kernel_d3
                 )
                 idx_offset = start_idx + offset
@@ -493,7 +488,7 @@ class RulsifTimeSeriesAnomalyDetection:
         return K @ thetas
 
     @staticmethod
-    def torch_kernel_density_ratio_model2(
+    def batch_torch_kernel_density_ratio_model(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         thetas: torch.Tensor,
@@ -526,7 +521,7 @@ class RulsifTimeSeriesAnomalyDetection:
         return ((alpha / n) * (H1)) + (((1.0 - alpha) / n) * (H2))
 
     @staticmethod
-    def torch_H2(
+    def batch_torch_H(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         alpha: float | torch.Tensor,
@@ -558,7 +553,7 @@ class RulsifTimeSeriesAnomalyDetection:
         return K.sum(dim=0) / y_1.shape[0]
 
     @staticmethod
-    def torch_h2(
+    def batch_torch_h2(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
@@ -585,7 +580,7 @@ class RulsifTimeSeriesAnomalyDetection:
         )
 
     @staticmethod
-    def torch_get_thetas2(
+    def batch_torch_get_thetas(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
@@ -593,8 +588,8 @@ class RulsifTimeSeriesAnomalyDetection:
         _lambda: float | torch.Tensor,
     ) -> torch.Tensor:
         n = y_1.shape[1]
-        H = RulsifTimeSeriesAnomalyDetection.torch_H2(y_1, y_2, alpha, kernel)
-        h = RulsifTimeSeriesAnomalyDetection.torch_h2(y_1, y_1, kernel)
+        H = RulsifTimeSeriesAnomalyDetection.batch_torch_H(y_1, y_2, alpha, kernel)
+        h = RulsifTimeSeriesAnomalyDetection.batch_torch_h2(y_1, y_1, kernel)
         return torch.linalg.solve(
             H + _lambda * torch.eye(n, dtype=torch.int32, device=h.device), h
         )
@@ -622,7 +617,7 @@ class RulsifTimeSeriesAnomalyDetection:
         )
 
     @staticmethod
-    def torch_PE2(
+    def batch_torch_PE(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         thetas: torch.Tensor,
@@ -630,10 +625,10 @@ class RulsifTimeSeriesAnomalyDetection:
         kernel: Callable[[torch.Tensor], torch.Tensor],
     ) -> torch.Tensor:
         n = y_1.shape[1]
-        g1 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model2(
+        g1 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
             y_1, y_1, thetas, kernel
         )
-        g2 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model2(
+        g2 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
             y_2, y_1, thetas, kernel
         )
         return (
@@ -664,17 +659,17 @@ class RulsifTimeSeriesAnomalyDetection:
         )
 
     @staticmethod
-    def J_of_thetas2(
+    def batch_J_of_thetas(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         thetas: torch.Tensor,
         alpha: float | torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
     ) -> torch.Tensor:
-        g1 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model2(
+        g1 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
             y_1, y_1, thetas, kernel
         )
-        g2 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model2(
+        g2 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
             y_2, y_1, thetas, kernel
         )
         return (
@@ -700,17 +695,17 @@ class RulsifTimeSeriesAnomalyDetection:
         return divergence
 
     @staticmethod
-    def calculate_dissimilarity2(
+    def batch_calculate_dissimilarity(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         alpha: float | torch.Tensor,
         _lambda: float | torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
     ) -> torch.Tensor:
-        thetas = RulsifTimeSeriesAnomalyDetection.torch_get_thetas2(
+        thetas = RulsifTimeSeriesAnomalyDetection.batch_torch_get_thetas(
             y_1, y_2, kernel, alpha, _lambda
         )
-        divergence = RulsifTimeSeriesAnomalyDetection.torch_PE2(
+        divergence = RulsifTimeSeriesAnomalyDetection.batch_torch_PE(
             y_1, y_2, thetas, alpha, kernel
         )
         return divergence
@@ -732,23 +727,24 @@ class RulsifTimeSeriesAnomalyDetection:
         return torch.vstack([forward, backwards, forward + backwards])
 
     @staticmethod
-    def bidirectional_dissimilarity2(
+    def batch_bidirectional_dissimilarity(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         alpha: float | torch.Tensor,
         _lambda: float | torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
     ) -> torch.Tensor:
-        forward = RulsifTimeSeriesAnomalyDetection.calculate_dissimilarity2(
+        forward = RulsifTimeSeriesAnomalyDetection.batch_calculate_dissimilarity(
             y_1, y_2, alpha, _lambda, kernel
         )
-        backwards = RulsifTimeSeriesAnomalyDetection.calculate_dissimilarity2(
+        backwards = RulsifTimeSeriesAnomalyDetection.batch_calculate_dissimilarity(
             y_2, y_1, alpha, _lambda, kernel
         )
         return torch.vstack((forward, backwards, forward + backwards))
 
+    # same as batch_bidirectional_dissimilarity, but without uneccesary duplicate computations and function calls
     @staticmethod
-    def fast_bidirectional_dissimilarity2(
+    def fast_batch_bidirectional_dissimilarity(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         alpha: float | torch.Tensor,
