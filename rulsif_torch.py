@@ -3,8 +3,8 @@ RuLSIF Time-Series Anomaly detection using torch
 Author: Beniamin Condrea
 Written 7/18/2022
 """
-from typing import Any, Callable, Dict
 
+from typing import Any, Callable, Dict
 import torch
 from torch.backends import cuda
 
@@ -113,7 +113,6 @@ class RulsifTimeSeriesAnomalyDetection:
             n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
             r= RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
     """
-
     def __init__(
         self,
         data: torch.Tensor = torch.tensor(()),
@@ -125,149 +124,33 @@ class RulsifTimeSeriesAnomalyDetection:
         device: str = "cpu",
         batch_size: int | torch.Tensor = 32
     ):
-        self.__device = device
-        self.__data = data.to(device=self.__device)
+        self.device = device
+        self.data = data
 
-        self.__sample_width = torch.tensor(
-            sample_width, dtype=torch.int32, device=self.__device
+        self.sample_width = torch.tensor(
+            sample_width, dtype=torch.int32, device=self.device
         )
-        self.__retro_width = torch.tensor(
-            retro_width, dtype=torch.int32, device=self.__device
+        self.retro_width = torch.tensor(
+            retro_width, dtype=torch.int32, device=self.device
         )
-        self.__sigma = torch.tensor(sigma, dtype=torch.float32, device=self.__device)
-        self.__alpha = torch.tensor(alpha, dtype=torch.float32, device=self.__device)
-        self.__lambda = torch.tensor(_lambda, dtype=torch.float32, device=self.__device)
-        self.__batch_size = torch.tensor(
-            batch_size, dtype=torch.int32, device=self.__device
+        self.sigma = torch.tensor(sigma, dtype=torch.float32, device=self.device)
+        self.alpha = torch.tensor(alpha, dtype=torch.float32, device=self.device)
+        self.lambda_ = torch.tensor(_lambda, dtype=torch.float32, device=self.device)
+        self.batch_size = torch.tensor(
+            batch_size, dtype=torch.int32, device=self.device
         )
-        self.__dissimilarities_size = torch.tensor(
-            self.__data.shape[0] - self.__sample_width - (2 * self.__retro_width) + 2,
-            dtype=torch.int32,
-            device=self.__device,
-        )
-        self.__dissimilarities = None
-        self.__batch_dissimilarities = None
+        # self.dissimilarities_size = torch.tensor(
+        #     self.data.shape[0] - self.sample_width - (2 * self.retro_width) + 2,
+        #     dtype=torch.int32,
+        #     device=self.device,
+        # )
+        self.__dissimilarities = torch.tensor(())
+        self.__batch_dissimilarities = torch.tensor(())
 
-    def set_dissimilarities(self) -> None:
+    @property
+    def dissimilarities(self) -> torch.Tensor:
         """
-        Sets the dissimilarities without batching. May not effectively use the GPU. Will perform more slowly than
-        `set_batch_dissimilarities()`.
-
-        Example::
-
-            n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
-            r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.set_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
-        """
-        try:
-            assert (
-                self.__dissimilarities_size > 0
-            ), f"""Cannot run Rulsif algorithm under these conditions.
-                Dissimilarity size: {self.__dissimilarities_size}.
-                Input more data, or decrease the sample width and/or retro width"""
-        except AssertionError as err:
-            raise err
-        self.__dissimilarities = torch.zeros(
-            (self.__dissimilarities_size, 4), dtype=torch.float32, device=self.__device
-        )
-        sigma_gaussian_kernel_d2 = RulsifTimeSeriesAnomalyDetection.generate_torch_k_gaussian_kernel(
-            self.__sigma, dim=2
-        )
-        subsequences = RulsifTimeSeriesAnomalyDetection.convert_data_to_windows(
-            self.__data, self.__sample_width
-        )
-        try:
-            for idx in [
-                (x, x + self.__retro_width, x + (self.__retro_width * 2))
-                for x in range(0, self.__dissimilarities_size, 1)
-            ]:
-                y_1 = subsequences[idx[0] : idx[1]]
-                y_2 = subsequences[idx[1] : idx[2]]
-                diss_calc = self.bidirectional_dissimilarity(
-                    y_1, y_2, self.__alpha, self.__lambda, sigma_gaussian_kernel_d2
-                )
-                tensor_debugging(diss_calc)
-                point_x = torch.tensor(
-                    idx[1] + self.__sample_width // 2,
-                    dtype=torch.float32,
-                    device=self.__device,
-                )
-                diss_data = torch.tensor(
-                    (point_x, diss_calc[0], diss_calc[1], diss_calc[2]),
-                    device=self.__device,
-                )
-                self.__dissimilarities[idx[0]] = diss_data
-        except RuntimeError as err:
-            torch.cuda.ipc_collect()
-            raise err
-
-    def set_batch_dissimilarities(self) -> None:
-        """
-        Sets the dissimilarities with batching. May more effectively use the GPU. Will perform faster than `set_dissimilarities()`.
-        Larger batch size will generally improve GPU utilization. Will throw `RuntimeError: CUDA out of memory.` if batch size is too large.
-
-        Example::
-
-            n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
-            r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.set_batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
-        """
-        try:
-            assert (
-                self.__dissimilarities_size > 0
-            ), f"""Cannot run Rulsif algorithm under these conditions.
-                Dissimilarity size: {self.__dissimilarities_size}.
-                Input more data, or decrease the sample width and/or retro width"""
-        except AssertionError as err:
-            raise err
-        self.__batch_dissimilarities = torch.zeros(
-            (self.__dissimilarities_size, 4), device=self.__device
-        )
-        sigma_gaussian_kernel_d3 = self.generate_torch_k_gaussian_kernel(
-            self.__sigma, dim=3
-        )
-        batch_subsequences = (
-            RulsifTimeSeriesAnomalyDetection.convert_data_to_windows_batches(
-                self.__data, self.__sample_width, self.__retro_width
-            )
-        )
-        offset = self.get_offset()
-        assert (
-            self.__batch_size > 0
-        ), f"Batch size must be at least 1. Current batch size: {self.__batch_size}"
-        try:
-            start_idx = torch.tensor(0, dtype=torch.int32, device=self.__device)
-            end_idx = torch.tensor(self.__batch_size, device=self.__device)
-            y_1_batch_subsequences = batch_subsequences[: self.__dissimilarities_size]
-            y_2_batch_subsequences = batch_subsequences[self.__retro_width :]
-            assert y_1_batch_subsequences.shape[0] == y_2_batch_subsequences.shape[0]
-            while start_idx < self.__dissimilarities_size:
-                y_1 = y_1_batch_subsequences[start_idx:end_idx]
-                y_2 = y_2_batch_subsequences[start_idx:end_idx]
-                diss_calc = self.fast_batch_bidirectional_dissimilarity(
-                    y_1, y_2, self.__alpha, self.__lambda, sigma_gaussian_kernel_d3
-                )
-                idx_offset = start_idx + offset
-                point_x = torch.arange(
-                    idx_offset,
-                    y_1.shape[0] + idx_offset,
-                    1,
-                    dtype=torch.float32,
-                    device=self.__device,
-                )
-                diss_data = torch.column_stack(
-                    (point_x, diss_calc[0], diss_calc[1], diss_calc[2])
-                )
-                self.__batch_dissimilarities[start_idx:end_idx] = diss_data
-                start_idx += self.__batch_size
-                end_idx += self.__batch_size
-        except RuntimeError as err:
-            torch.cuda.ipc_collect()
-            raise err
-
-    def get_dissimilarities(self) -> torch.Tensor:
-        """
-        Gets the dissimilarities from the `set_dissimilarities()` call. Will throw `NameError` if `set_dissimilarities()` has
+        Gets the dissimilarities from the `dissimilarities()` call. Will throw `NameError` if `dissimilarities()` has
         not been previously called.
 
         Returns:
@@ -277,14 +160,68 @@ class RulsifTimeSeriesAnomalyDetection:
 
             n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
             r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.set_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
-            r.get_dissimilarities() # gets the RuLSIF dissimilarities
+            r.dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
+            r.dissimilarities() # gets the RuLSIF dissimilarities
         """
         return self.__dissimilarities
-
-    def get_batch_dissimilarities(self) -> torch.Tensor:
+    
+    def compute_dissimilarities(self) -> None:
         """
-        Gets the dissimilarities from the `set_batch_dissimilarities()` call. Will throw `NameError` if `set_batch_dissimilarities()`
+        Sets the dissimilarities without batching. May not effectively use the GPU. Will perform more slowly than
+        `batch_dissimilarities()`.
+
+        Example::
+
+            n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
+            r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
+            r.dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
+        """
+        try:
+            assert (
+                self.dissimilarities_size > 0
+            ), f"""Cannot run Rulsif algorithm under these conditions.
+                Dissimilarity size: {self.dissimilarities_size}.
+                Input more data, or decrease the sample width and/or retro width"""
+        except AssertionError as err:
+            raise err
+        self.__dissimilarities = torch.zeros(
+            (self.dissimilarities_size, 4), dtype=torch.float32, device=self.device
+        )
+        sigma_gaussian_kernel_d2 = RulsifTimeSeriesAnomalyDetection.generate_torch_k_gaussian_kernel(
+            self.sigma, dim=2
+        )
+        subsequences = RulsifTimeSeriesAnomalyDetection.convert_data_to_windows(
+            self.data, self.sample_width
+        )
+        try:
+            for idx in [
+                (x, x + self.retro_width, x + (self.retro_width * 2))
+                for x in range(0, self.dissimilarities_size, 1)
+            ]:
+                y_1 = subsequences[idx[0] : idx[1]]
+                y_2 = subsequences[idx[1] : idx[2]]
+                diss_calc = RulsifTimeSeriesAnomalyDetection.bidirectional_dissimilarity(
+                    y_1, y_2, self.alpha, self.lambda_, sigma_gaussian_kernel_d2
+                )
+                tensor_debugging(diss_calc)
+                point_x = torch.tensor(
+                    idx[1] + self.sample_width // 2,
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                diss_data = torch.tensor(
+                    (point_x, diss_calc[0], diss_calc[1], diss_calc[2]),
+                    device=self.device,
+                )
+                self.__dissimilarities[idx[0]] = diss_data
+        except RuntimeError as err:
+            torch.cuda.ipc_collect()
+            raise err
+        
+    @property
+    def batch_dissimilarities(self) -> torch.Tensor:
+        """
+        Gets the dissimilarities from the `batch_dissimilarities()` call. Will throw `NameError` if `batch_dissimilarities()`
         has not been previously called.
 
         Returns:
@@ -294,18 +231,75 @@ class RulsifTimeSeriesAnomalyDetection:
 
             n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
             r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.set_batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
-            r.get_batch_dissimilarities() # gets the RuLSIF dissimilarities
+            r.batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
+            r.batch_dissimilarities() # gets the RuLSIF dissimilarities
         """
         return self.__batch_dissimilarities
 
-    def set_device(self, device: str) -> None:
+    def compute_batch_dissimilarities(self) -> None:
         """
-        Sets the device to store dissimilarities and perform computation.
-        """
-        self.__device = device
+        Sets the dissimilarities with batching. May more effectively use the GPU. Will perform faster than `dissimilarities()`.
+        Larger batch size will generally improve GPU utilization. Will throw `RuntimeError: CUDA out of memory.` if batch size is too large.
 
-    def get_device(self) -> str:
+        Example::
+
+            n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
+            r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
+            r.batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
+        """
+        try:
+            assert (
+                self.dissimilarities_size > 0
+            ), f"""Cannot run Rulsif algorithm under these conditions.
+                Dissimilarity size: {self.dissimilarities_size}.
+                Input more data, or decrease the sample width and/or retro width"""
+        except AssertionError as err:
+            raise err
+        self.__batch_dissimilarities = torch.zeros((self.dissimilarities_size, 4), device=self.device)
+        sigma_gaussian_kernel_d3 = RulsifTimeSeriesAnomalyDetection.generate_torch_k_gaussian_kernel(
+            self.sigma, dim=3
+        )
+        batch_subsequences = (
+            RulsifTimeSeriesAnomalyDetection.convert_data_to_windows_batches(
+                self.data, self.sample_width, self.retro_width
+            )
+        )
+        offset = self.offset
+        assert (
+            self.batch_size > 0
+        ), f"Batch size must be at least 1. Current batch size: {self.batch_size}"
+        try:
+            start_idx = torch.tensor(0, dtype=torch.int32, device=self.device)
+            end_idx = torch.tensor(self.batch_size, device=self.device)
+            y_1_batch_subsequences = batch_subsequences[: self.dissimilarities_size]
+            y_2_batch_subsequences = batch_subsequences[self.retro_width :]
+            assert y_1_batch_subsequences.shape[0] == y_2_batch_subsequences.shape[0]
+            while start_idx < self.dissimilarities_size:
+                y_1 = y_1_batch_subsequences[start_idx:end_idx]
+                y_2 = y_2_batch_subsequences[start_idx:end_idx]
+                diss_calc = RulsifTimeSeriesAnomalyDetection.fast_batch_bidirectional_dissimilarity(
+                    y_1, y_2, self.alpha, self.lambda_, sigma_gaussian_kernel_d3
+                )
+                idx_offset = start_idx + offset
+                point_x = torch.arange(
+                    idx_offset,
+                    y_1.shape[0] + idx_offset,
+                    1,
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                diss_data = torch.column_stack(
+                    (point_x, diss_calc[0], diss_calc[1], diss_calc[2])
+                )
+                self.batch_dissimilarities[start_idx:end_idx] = diss_data
+                start_idx += self.batch_size
+                end_idx += self.batch_size
+        except RuntimeError as err:
+            torch.cuda.ipc_collect()
+            raise err
+
+    @property
+    def device(self) -> str:
         """
         Gets the device to perform dissimilarities computation and store the dissimilarities. Note that the data is stored on the
         host.
@@ -315,16 +309,22 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         return self.__device
 
-    def set_data(self, data: torch.Tensor) -> None:
+    # should use descriptors for setters/getters (DRY)
+    @device.setter
+    def device(self, device: str) -> None:
         """
-        Sets the data to perform dissimilarities computaiton. This will set the data
+        Sets the device to store dissimilarities and perform computation.
         """
-        self.__data = data.to(device=self.__device)
-        self.__dissimilarities_size = (
-            self.__data.shape[0] - self.__sample_width - (2 * self.__retro_width) + 2
-        )
+        self.__device = device
+        # if we are changing devices, don't forget the data
+        try:
+            if hasattr(self, '__data') and self.__device not in self.__data.device.type:
+                self.data = self.device.to(self.device)
+        except ValueError:
+            raise ValueError('Device must be set properly, generally "cpu" or "cuda:<idx>"')
 
-    def get_data(self) -> torch.Tensor:
+    @property
+    def data(self) -> torch.Tensor:
         """
         Gets the raw data as a torch tensor.
 
@@ -333,13 +333,18 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         return self.__data
 
-    def set_sample_width(self, sample_width: int | torch.Tensor) -> None:
+    @data.setter
+    def data(self, data: torch.Tensor) -> None:
         """
-        Sets the sample width before computation.
+        Sets the data to perform dissimilarities computaiton. This will set the data
         """
-        self.__sample_width = sample_width
+        try:
+            self.__data = data.to(device=self.device)
+        except ValueError:
+            raise ValueError('Data must be a torch tensor')
 
-    def get_sample_width(self) -> int | torch.Tensor:
+    @property
+    def sample_width(self) -> int | torch.Tensor:
         """
         Get the sample width. This is also known as the `k` value.
 
@@ -348,13 +353,21 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         return self.__sample_width
 
-    def set_retro_width(self, retro_width: int | torch.Tensor) -> None:
+    @sample_width.setter
+    def sample_width(self, sample_width: int | torch.Tensor) -> None:
         """
-        Sets the retro width before the computation.
+        Sets the sample width before computation.
         """
-        self.__retro_width = retro_width
+        try:
+            self.__sample_width = int(sample_width)
+            if self.__sample_width < 1:
+                raise ValueError
+        except ValueError as err:
+            raise err('Sample width must be a positive integer')
+        
 
-    def get_retro_width(self) -> int | torch.Tensor:
+    @property
+    def retro_width(self) -> int | torch.Tensor:
         """
         Get the retro width. This is also known as the `n` value.
 
@@ -363,13 +376,20 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         return self.__retro_width
 
-    def set_sigma(self, sigma: float | torch.Tensor) -> None:
+    @retro_width.setter
+    def retro_width(self, retro_width: int | torch.Tensor) -> None:
         """
-        Sets the sigma value before the computation.
+        Sets the retro width before the computation.
         """
-        self.__sigma = sigma
+        try:
+            self.__retro_width = int(retro_width)
+            if retro_width < 1:
+                raise ValueError
+        except ValueError as err:
+            raise err('Retro width must be a positive integer')
 
-    def get_sigma(self) -> float | torch.Tensor:
+    @property
+    def sigma(self) -> float | torch.Tensor:
         """
         Get the sigma set for the kernel.
 
@@ -378,13 +398,20 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         return self.__sigma
 
-    def set_alpha(self, alpha: int | torch.Tensor) -> None:
+    @sigma.setter
+    def sigma(self, sigma: float | torch.Tensor) -> None:
         """
-        Sets the alpha value before the computation.
+        Sets the sigma value before the computation.
         """
-        self.__alpha = alpha
+        try:
+            if sigma < 0:
+                raise ValueError
+            self.__sigma = torch.tensor(sigma, dtype=torch.float32, device=self.device)
+        except ValueError as err:
+            raise err('Sigma cannot be negative')
 
-    def get_alpha(self) -> float | torch.Tensor:
+    @property
+    def alpha(self) -> float | torch.Tensor:
         """
         Get alpha set for the ratio of comparisons.
 
@@ -393,13 +420,20 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         return self.__alpha
 
-    def set_lambda(self, lambda_: int | torch.Tensor) -> None:
+    @alpha.setter
+    def alpha(self, alpha: float | torch.Tensor) -> None:
         """
-        Sets the lambda value before the computation.
+        Sets the alpha value before the computation.
         """
-        self.__lambda = lambda_
+        try:
+            if alpha < 0:
+                raise ValueError
+            self.__alpha = torch.tensor(alpha, dtype=torch.float32, device=self.device)
+        except ValueError as err:
+            raise err('Alpha cannot be negative')
 
-    def get_lambda(self) -> float | torch.Tensor:
+    @property
+    def lambda_(self) -> float | torch.Tensor:
         """
         Get lambda set for regularization.
 
@@ -408,38 +442,67 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         return self.__lambda
 
-    def set_batch_size(self, batch_size: int | torch.Tensor) -> None:
+    @lambda_.setter
+    def lambda_(self, lambda_: float | torch.Tensor) -> None:
         """
-        Sets the batch size before the computation.
+        Sets the lambda value before the computation.
         """
-        self.__batch_size = batch_size
+        try:
+            self.__lambda = torch.tensor(lambda_, dtype=torch.float32, device=self.device)
+            if lambda_ < 0:
+                raise ValueError
+        except ValueError as err:
+            raise err('Lambda cannot be negative')
 
-    def get_batch_size(self) -> int | torch.Tensor:
+    @property
+    def batch_size(self) -> int | torch.Tensor:
         """
-        Get the batch size used for `get_batch_dissimilarities()`. This can be used for benchmarking.
+        Get the batch size used for `batch_dissimilarities()`. This can be used for benchmarking.
 
         Returns:
             :obj:`int`: batch size.
         """
         return self.__batch_size
-
-    def get_dissimilarities_size(self) -> int | torch.Tensor:
+    
+    @batch_size.setter
+    def batch_size(self, batch_size: int | torch.Tensor) -> None:
         """
-        Get the dissimilarity size. Note that this is less than the size of the input data size.
-
-        Returns:
-            :obj:`int`: `N - k - 2n + 2`, where `N` is the data size, `k` is the sample width, and `n` is the retro width.
+        Sets the batch size before the computation.
         """
-        return self.__dissimilarities_size
+        try:
+            self.__batch_size = torch.tensor(batch_size, dtype=torch.int32, device=self.device)
+            if batch_size < 1:
+                raise ValueError
+        except ValueError as err:
+            raise err('Batch size must be positive integer')
 
-    def get_offset(self) -> int | torch.Tensor:
+    @property
+    def offset(self) -> int | torch.Tensor:
         """
         Get the starting offset in which the dissimilarities begin recording.
 
         Returns:
             :obj:`int`: `k//2 + n` where `k` is the sample width and `n` is the retro width.
         """
-        return self.__retro_width + self.__sample_width // 2
+        return self.retro_width + self.sample_width // 2
+    
+    @offset.setter
+    def offset(self, offset: int | torch.Tensor) -> None:
+        raise AttributeError('Cannot set the offset. Offset is computed from the retro_width and sample_width.')
+    
+    @property
+    def dissimilarities_size(self) -> int | torch.Tensor:
+        """
+        Get the dissimilarity size. Note that this is less than the size of the input data size.
+
+        Returns:
+            :obj:`int`: `N - k - 2n + 2`, where `N` is the data size, `k` is the sample width, and `n` is the retro width.
+        """
+        return self.data.shape[0] - self.sample_width - (2 * self.retro_width) + 2
+    
+    @dissimilarities_size.setter
+    def dissimilarities_size(self, size: int | torch.Tensor) -> None:
+        raise AttributeError("Cannot set dissimilarity size. Dissimilarity size is computed from data, samplewidth and retro_width")
 
     @staticmethod
     def generate_torch_k_gaussian_kernel(
@@ -565,7 +628,7 @@ class RulsifTimeSeriesAnomalyDetection:
         return K.sum(dim=1) / y_1.shape[1]
 
     @staticmethod
-    def torch_get_thetas(
+    def torch_thetas(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
@@ -580,7 +643,7 @@ class RulsifTimeSeriesAnomalyDetection:
         )
 
     @staticmethod
-    def batch_torch_get_thetas(
+    def batch_torch_thetas(
         y_1: torch.Tensor,
         y_2: torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
@@ -686,7 +749,7 @@ class RulsifTimeSeriesAnomalyDetection:
         _lambda: float | torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
     ) -> torch.Tensor:
-        thetas = RulsifTimeSeriesAnomalyDetection.torch_get_thetas(
+        thetas = RulsifTimeSeriesAnomalyDetection.torch_thetas(
             y_1, y_2, kernel, alpha, _lambda
         )
         divergence = RulsifTimeSeriesAnomalyDetection.torch_PE(
@@ -702,7 +765,7 @@ class RulsifTimeSeriesAnomalyDetection:
         _lambda: float | torch.Tensor,
         kernel: Callable[[torch.Tensor], torch.Tensor],
     ) -> torch.Tensor:
-        thetas = RulsifTimeSeriesAnomalyDetection.batch_torch_get_thetas(
+        thetas = RulsifTimeSeriesAnomalyDetection.batch_torch_thetas(
             y_1, y_2, kernel, alpha, _lambda
         )
         divergence = RulsifTimeSeriesAnomalyDetection.batch_torch_PE(
@@ -844,3 +907,4 @@ class RulsifTimeSeriesAnomalyDetection:
             shape[0], shape[1], shape[2] * shape[3]
         )
         return batch_subsequences
+
