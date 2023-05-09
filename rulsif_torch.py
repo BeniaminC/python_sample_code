@@ -139,91 +139,19 @@ class RulsifTimeSeriesAnomalyDetection:
         self.batch_size = torch.tensor(
             batch_size, dtype=torch.int32, device=self.device
         )
+        # below is removed becuase the getter computes it, we can cache it if we really need to squeeze performance
         # self.dissimilarities_size = torch.tensor(
         #     self.data.shape[0] - self.sample_width - (2 * self.retro_width) + 2,
         #     dtype=torch.int32,
         #     device=self.device,
         # )
-        self.__dissimilarities = torch.tensor(())
         self.__batch_dissimilarities = torch.tensor(())
-
-    @property
-    def dissimilarities(self) -> torch.Tensor:
-        """
-        Gets the dissimilarities from the `dissimilarities()` call. Will throw `NameError` if `dissimilarities()` has
-        not been previously called.
-
-        Returns:
-            :obj:`torch.Tensor`: n-by-3-by-2 tensor of the forward, backward, and total dissimilarity with their respective point x.
-
-        Example::
-
-            n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
-            r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
-            r.dissimilarities() # gets the RuLSIF dissimilarities
-        """
-        return self.__dissimilarities
     
-    def compute_dissimilarities(self) -> None:
-        """
-        Sets the dissimilarities without batching. May not effectively use the GPU. Will perform more slowly than
-        `batch_dissimilarities()`.
 
-        Example::
-
-            n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
-            r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
-        """
-        try:
-            assert (
-                self.dissimilarities_size > 0
-            ), f"""Cannot run Rulsif algorithm under these conditions.
-                Dissimilarity size: {self.dissimilarities_size}.
-                Input more data, or decrease the sample width and/or retro width"""
-        except AssertionError as err:
-            raise err
-        self.__dissimilarities = torch.zeros(
-            (self.dissimilarities_size, 4), dtype=torch.float32, device=self.device
-        )
-        sigma_gaussian_kernel_d2 = RulsifTimeSeriesAnomalyDetection.generate_torch_k_gaussian_kernel(
-            self.sigma, dim=2
-        )
-        subsequences = RulsifTimeSeriesAnomalyDetection.convert_data_to_windows(
-            self.data, self.sample_width
-        )
-        try:
-            for idx in [
-                (x, x + self.retro_width, x + (self.retro_width * 2))
-                for x in range(0, self.dissimilarities_size, 1)
-            ]:
-                y_1 = subsequences[idx[0] : idx[1]]
-                y_2 = subsequences[idx[1] : idx[2]]
-                diss_calc = RulsifTimeSeriesAnomalyDetection.bidirectional_dissimilarity(
-                    y_1, y_2, self.alpha, self.lambda_, sigma_gaussian_kernel_d2
-                )
-                tensor_debugging(diss_calc)
-                point_x = torch.tensor(
-                    idx[1] + self.sample_width // 2,
-                    dtype=torch.float32,
-                    device=self.device,
-                )
-                diss_data = torch.tensor(
-                    (point_x, diss_calc[0], diss_calc[1], diss_calc[2]),
-                    device=self.device,
-                )
-                self.__dissimilarities[idx[0]] = diss_data
-        except RuntimeError as err:
-            torch.cuda.ipc_collect()
-            raise err
-        
     @property
     def batch_dissimilarities(self) -> torch.Tensor:
         """
-        Gets the dissimilarities from the `batch_dissimilarities()` call. Will throw `NameError` if `batch_dissimilarities()`
-        has not been previously called.
-
+        Gets the dissimilarities from the `compute_batch_dissimilarities()` call.
         Returns:
             :obj:`torch.Tensor`: n-by-3-by-2 tensor of the forward, backward, and total dissimilarity with their respective point x.
 
@@ -231,8 +159,8 @@ class RulsifTimeSeriesAnomalyDetection:
 
             n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
             r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
-            r.batch_dissimilarities() # gets the RuLSIF dissimilarities
+            r.compute_batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
+            r.batch_dissimilarities # gets the RuLSIF dissimilarities
         """
         return self.__batch_dissimilarities
 
@@ -245,7 +173,7 @@ class RulsifTimeSeriesAnomalyDetection:
 
             n = torch.normal(mean=0., std=1., size=(20,2)) # 2-dimensional data
             r = RulsifTimeSeriesAnomalyDetection(n, 10, 50, 0.569, 0.1, 0.01, 'cuda', 2048)
-            r.batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
+            r.compute_batch_dissimilarities() # sets the dissimilarities to RuLSIF dissimilarities
         """
         try:
             assert (
@@ -320,8 +248,8 @@ class RulsifTimeSeriesAnomalyDetection:
         try:
             if hasattr(self, '__data') and self.__device not in self.__data.device.type:
                 self.data = self.device.to(self.device)
-        except ValueError:
-            raise ValueError('Device must be set properly, generally "cpu" or "cuda:<idx>"')
+        except ValueError as err:
+            raise err
 
     @property
     def data(self) -> torch.Tensor:
@@ -340,8 +268,8 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         try:
             self.__data = data.to(device=self.device)
-        except ValueError:
-            raise ValueError('Data must be a torch tensor')
+        except ValueError as err:
+            raise err
 
     @property
     def sample_width(self) -> int | torch.Tensor:
@@ -363,7 +291,7 @@ class RulsifTimeSeriesAnomalyDetection:
             if self.__sample_width < 1:
                 raise ValueError
         except ValueError as err:
-            raise err('Sample width must be a positive integer')
+            raise err
         
 
     @property
@@ -386,7 +314,7 @@ class RulsifTimeSeriesAnomalyDetection:
             if retro_width < 1:
                 raise ValueError
         except ValueError as err:
-            raise err('Retro width must be a positive integer')
+            raise err
 
     @property
     def sigma(self) -> float | torch.Tensor:
@@ -408,7 +336,7 @@ class RulsifTimeSeriesAnomalyDetection:
                 raise ValueError
             self.__sigma = torch.tensor(sigma, dtype=torch.float32, device=self.device)
         except ValueError as err:
-            raise err('Sigma cannot be negative')
+            raise err
 
     @property
     def alpha(self) -> float | torch.Tensor:
@@ -430,7 +358,7 @@ class RulsifTimeSeriesAnomalyDetection:
                 raise ValueError
             self.__alpha = torch.tensor(alpha, dtype=torch.float32, device=self.device)
         except ValueError as err:
-            raise err('Alpha cannot be negative')
+            raise err
 
     @property
     def lambda_(self) -> float | torch.Tensor:
@@ -452,7 +380,7 @@ class RulsifTimeSeriesAnomalyDetection:
             if lambda_ < 0:
                 raise ValueError
         except ValueError as err:
-            raise err('Lambda cannot be negative')
+            raise err
 
     @property
     def batch_size(self) -> int | torch.Tensor:
@@ -474,7 +402,7 @@ class RulsifTimeSeriesAnomalyDetection:
             if batch_size < 1:
                 raise ValueError
         except ValueError as err:
-            raise err('Batch size must be positive integer')
+            raise err
 
     @property
     def offset(self) -> int | torch.Tensor:
@@ -524,286 +452,6 @@ class RulsifTimeSeriesAnomalyDetection:
                 / (2.0 * sigma * sigma)
             )
         )
-
-    @staticmethod
-    def torch_vectorized_matrix_subtract(
-        m_1: torch.Tensor, m_2: torch.Tensor
-    ) -> torch.Tensor:
-        return m_1[:, None, :] - m_2[None, :, :]
-
-    @staticmethod
-    def torch_vectorized_matrix_matrix_subtract(
-        m_1: torch.Tensor, m_2: torch.Tensor
-    ) -> torch.Tensor:
-        return m_1[:, :, None, :] - m_2[:, None, :, :]
-
-    @staticmethod
-    def torch_kernel_density_ratio_model(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        thetas: torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_subtract(
-            y_1, y_2
-        )
-        K = kernel(diff)
-        return K @ thetas
-
-    @staticmethod
-    def batch_torch_kernel_density_ratio_model(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        thetas: torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_matrix_subtract(
-            y_1, y_2
-        )
-        K = kernel(diff)
-        return RulsifTimeSeriesAnomalyDetection.broadcast_matrix_vector_mult(K, thetas)
-
-    @staticmethod
-    def torch_H(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        alpha: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        n = y_1.shape[0]
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_subtract(
-            y_1, y_1
-        )
-        K = kernel(diff)
-        H1 = K.T @ K
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_subtract(
-            y_2, y_1
-        )
-        K = kernel(diff)
-        H2 = K.T @ K
-        return ((alpha / n) * (H1)) + (((1.0 - alpha) / n) * (H2))
-
-    @staticmethod
-    def batch_torch_H(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        alpha: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        n = y_1.shape[1]
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_matrix_subtract(
-            y_1, y_1
-        )
-        K = kernel(diff)
-        H1 = torch.transpose(K, 1, 2) @ K
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_matrix_subtract(
-            y_2, y_1
-        )
-        K = kernel(diff)
-        H2 = torch.transpose(K, 1, 2) @ K
-        return ((alpha / n) * (H1)) + (((1.0 - alpha) / n) * (H2))
-
-    @staticmethod
-    def torch_h(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_subtract(
-            y_1, y_2
-        )
-        K = kernel(diff)
-        return K.sum(dim=0) / y_1.shape[0]
-
-    @staticmethod
-    def batch_torch_h2(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        diff = RulsifTimeSeriesAnomalyDetection.torch_vectorized_matrix_matrix_subtract(
-            y_1, y_2
-        )
-        K = kernel(diff)
-        return K.sum(dim=1) / y_1.shape[1]
-
-    @staticmethod
-    def torch_thetas(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-        alpha: float | torch.Tensor,
-        _lambda: float | torch.Tensor,
-    ) -> torch.Tensor:
-        n = y_1.shape[0]
-        H = RulsifTimeSeriesAnomalyDetection.torch_H(y_1, y_2, alpha, kernel)
-        h = RulsifTimeSeriesAnomalyDetection.torch_h(y_1, y_1, kernel)
-        return torch.linalg.solve(
-            H + _lambda * torch.eye(n, dtype=torch.int32, device=h.device), h
-        )
-
-    @staticmethod
-    def batch_torch_thetas(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-        alpha: float | torch.Tensor,
-        _lambda: float | torch.Tensor,
-    ) -> torch.Tensor:
-        n = y_1.shape[1]
-        H = RulsifTimeSeriesAnomalyDetection.batch_torch_H(y_1, y_2, alpha, kernel)
-        h = RulsifTimeSeriesAnomalyDetection.batch_torch_h2(y_1, y_1, kernel)
-        return torch.linalg.solve(
-            H + _lambda * torch.eye(n, dtype=torch.int32, device=h.device), h
-        )
-
-    @staticmethod
-    def torch_PE(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        thetas: torch.Tensor,
-        alpha: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        n = y_1.shape[0]
-        g1 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model(
-            y_1, y_1, thetas, kernel
-        )
-        g2 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model(
-            y_2, y_1, thetas, kernel
-        )
-        return (
-            -((alpha / (2.0 * n)) * torch.sum(torch.square(g1)))
-            - (((1.0 - alpha) / (2.0 * n)) * torch.sum(torch.square(g2)))
-            + ((1.0 / n) * torch.sum(g1))
-            - (0.5)
-        )
-
-    @staticmethod
-    def batch_torch_PE(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        thetas: torch.Tensor,
-        alpha: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        n = y_1.shape[1]
-        g1 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
-            y_1, y_1, thetas, kernel
-        )
-        g2 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
-            y_2, y_1, thetas, kernel
-        )
-        return (
-            -((alpha / 2.0) * torch.mean(torch.square(g1), dim=1))
-            - (((1 - alpha) / 2.0) * torch.mean(torch.square(g2), dim=1))
-            + (torch.mean(g1, dim=1))
-            - (0.5)
-        )
-
-    @staticmethod
-    def J_of_thetas(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        thetas: torch.Tensor,
-        alpha: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        g1 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model(
-            y_1, y_1, thetas, kernel
-        )
-        g2 = RulsifTimeSeriesAnomalyDetection.torch_kernel_density_ratio_model(
-            y_2, y_1, thetas, kernel
-        )
-        return (
-            ((alpha / 2.0) * torch.mean(g1 * g1))
-            + (((1.0 - alpha) / 2.0) * torch.mean(g2 * g2))
-            - torch.mean(g1)
-        )
-
-    @staticmethod
-    def batch_J_of_thetas(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        thetas: torch.Tensor,
-        alpha: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        g1 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
-            y_1, y_1, thetas, kernel
-        )
-        g2 = RulsifTimeSeriesAnomalyDetection.batch_torch_kernel_density_ratio_model(
-            y_2, y_1, thetas, kernel
-        )
-        return (
-            ((alpha / 2.0) * torch.mean(g1 * g1, dim=1))
-            + (((1 - alpha) / 2.0) * torch.mean(g2 * g2, dim=1))
-            - torch.mean(g1, dim=1)
-        )
-
-    @staticmethod
-    def calculate_dissimilarity(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        alpha: float | torch.Tensor,
-        _lambda: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        thetas = RulsifTimeSeriesAnomalyDetection.torch_thetas(
-            y_1, y_2, kernel, alpha, _lambda
-        )
-        divergence = RulsifTimeSeriesAnomalyDetection.torch_PE(
-            y_1, y_2, thetas, alpha, kernel
-        )
-        return divergence
-
-    @staticmethod
-    def batch_calculate_dissimilarity(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        alpha: float | torch.Tensor,
-        _lambda: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        thetas = RulsifTimeSeriesAnomalyDetection.batch_torch_thetas(
-            y_1, y_2, kernel, alpha, _lambda
-        )
-        divergence = RulsifTimeSeriesAnomalyDetection.batch_torch_PE(
-            y_1, y_2, thetas, alpha, kernel
-        )
-        return divergence
-
-    @staticmethod
-    def bidirectional_dissimilarity(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        alpha: float | torch.Tensor,
-        _lambda: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        forward = RulsifTimeSeriesAnomalyDetection.calculate_dissimilarity(
-            y_1, y_2, alpha, _lambda, kernel
-        )
-        backwards = RulsifTimeSeriesAnomalyDetection.calculate_dissimilarity(
-            y_2, y_1, alpha, _lambda, kernel
-        )
-        return torch.vstack([forward, backwards, forward + backwards])
-
-    @staticmethod
-    def batch_bidirectional_dissimilarity(
-        y_1: torch.Tensor,
-        y_2: torch.Tensor,
-        alpha: float | torch.Tensor,
-        _lambda: float | torch.Tensor,
-        kernel: Callable[[torch.Tensor], torch.Tensor],
-    ) -> torch.Tensor:
-        forward = RulsifTimeSeriesAnomalyDetection.batch_calculate_dissimilarity(
-            y_1, y_2, alpha, _lambda, kernel
-        )
-        backwards = RulsifTimeSeriesAnomalyDetection.batch_calculate_dissimilarity(
-            y_2, y_1, alpha, _lambda, kernel
-        )
-        return torch.vstack((forward, backwards, forward + backwards))
 
     # same as batch_bidirectional_dissimilarity, but without uneccesary duplicate computations and function calls
     @staticmethod
@@ -870,25 +518,6 @@ class RulsifTimeSeriesAnomalyDetection:
             - (half)
         )
         return torch.vstack((forward_PE, backward_PE, forward_PE + backward_PE))
-
-    @staticmethod
-    def broadcast_matrix_vector_mult(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-        return torch.einsum("ijk,ik->ij", A, B)
-
-    @staticmethod
-    def convert_data_to_windows(
-        data: torch.Tensor, sample_width: int | torch.Tensor
-    ) -> torch.Tensor:  # WORKING
-        raw_subsequences = data.unfold(
-            dimension=0, size=sample_width, step=1
-        )  # should be N - k + 1
-        shape = raw_subsequences.shape
-        subsequences = (
-            raw_subsequences.reshape(shape[0], shape[1] * shape[2])
-            if len(data.shape) > 1
-            else raw_subsequences
-        )
-        return subsequences
 
     @staticmethod
     def convert_data_to_windows_batches(
