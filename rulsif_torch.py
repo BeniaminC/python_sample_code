@@ -78,8 +78,7 @@ def cuda_debugging(device: str) -> Dict[str, Any]:
 
 class RulsifTimeSeriesAnomalyDetection:
     """
-    Apply RuLSIF anomaly detection on multi-dimensional time series data. Supports non-
-    batching and batching
+    Apply RuLSIF anomaly detection on multi-dimensional time series data. Supports batching.
 
         Args:
             data (:obj:`torch.Tensor`): time-series data. Support multidimensional data.
@@ -98,7 +97,7 @@ class RulsifTimeSeriesAnomalyDetection:
                 duced to plain density-ratio.
             _lambda (:obj:`float`): regularization parameter. This is used to prevent over-
                 fitting. Higher values will reduce overfitting, but too high will cause underfitting.
-                device (:obj:`torch.device` or :obj:`str`): sets the computation to perform on the CPU
+            device (:obj:`torch.device` or :obj:`str`): sets the computation to perform on the CPU
                 or the GPU supported by CUDA. Note that the data remains on the host.
                 This is generally set to `1, 0.1, 0.01, 0.001`
             batch_size(:obj:`int`): sets the batch size to perform vectorized computation. Note this
@@ -125,7 +124,7 @@ class RulsifTimeSeriesAnomalyDetection:
         batch_size: int | torch.Tensor = 32
     ):
         self.device = device
-        self.data = data
+        self.data = data # data stays on host until computed
 
         self.sample_width = torch.tensor(
             sample_width, dtype=torch.int32, device=self.device
@@ -153,7 +152,7 @@ class RulsifTimeSeriesAnomalyDetection:
         """
         Gets the dissimilarities from the `compute_batch_dissimilarities()` call.
         Returns:
-            :obj:`torch.Tensor`: n-by-3-by-2 tensor of the forward, backward, and total dissimilarity with their respective point x.
+            :obj:`torch.Tensor`: n-by-4 tensor of the x-point, forward, backward, and total dissimilarity with their respective point x.
 
         Example::
 
